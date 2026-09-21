@@ -82,12 +82,14 @@ CLI usage after downloading the model repository:
 
 ```bash
 mlx-gsq-generate \
-  /path/to/Qwen3.8-27B-GSQ-RCO-MLX/model.safetensors \
-  --tokenizer /path/to/Qwen3.8-27B-GSQ-RCO-MLX \
+  uqer1244/Qwen3.8-27B-GSQ-RCO-MLX \
   --prompt "Hello" \
   --max-tokens 32 \
   --verbose
 ```
+
+The CLI accepts a Hugging Face model ID, a local model directory, or a direct
+path to `model.safetensors`.
 
 `mlx_lm.load()` cannot load this checkpoint directly. Use `mlx_gsq.load()` so
 the packed tensor metadata is routed to the custom Metal kernels.

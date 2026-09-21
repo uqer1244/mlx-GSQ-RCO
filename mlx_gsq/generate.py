@@ -6,7 +6,7 @@ from pathlib import Path
 
 def main():
     parser=argparse.ArgumentParser(prog="python -m mlx_gsq.generate")
-    parser.add_argument("model",type=Path)
+    parser.add_argument("model",help="Local model path/directory or Hugging Face repo ID")
     parser.add_argument("--tokenizer",type=Path)
     parser.add_argument("--prompt",required=True)
     parser.add_argument("--max-tokens",type=int,default=64)
