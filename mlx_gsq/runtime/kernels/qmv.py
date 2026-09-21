@@ -61,6 +61,68 @@ def _kernel(qtype: str, in_features: int, out_features: int):
     )
 
 
+def _iq3_s_source(in_features: int, out_features: int) -> str:
+    return f"""
+    constexpr uint K={in_features}u;
+    constexpr uint N={out_features}u;
+    constexpr uint blocks_per_row=K/256u;
+    constexpr uint groups_per_row=K/32u;
+    uint lane=thread_index_in_simdgroup;
+    uint first_row=threadgroup_position_in_grid.x*8u
+        +simdgroup_index_in_threadgroup*4u;
+    uint input_row=threadgroup_position_in_grid.y;
+    float sums[4]={{0.0f,0.0f,0.0f,0.0f}};
+
+    for(uint group_index=lane;group_index<groups_per_row;group_index+=32u){{
+      float activation[32];
+      uint activation_base=input_row*K+group_index*32u;
+      for(uint i=0u;i<32u;++i) activation[i]=float(x[activation_base+i]);
+      uint block_col=group_index/8u;
+      uint group=group_index-block_col*8u;
+
+      for(uint rr=0u;rr<4u;++rr){{
+        uint out_row=first_row+rr;
+        if(out_row>=N) continue;
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*110u;
+        device const uchar* qs=block+2u+group*8u;
+        uint qh=uint(block[66u+group]);
+        device const uchar* signs=block+74u+group*4u;
+        uint scale_byte=uint(block[106u+group/2u]);
+        uint scale=(scale_byte>>(4u*(group&1u)))&15u;
+        float d=float(*(reinterpret_cast<device const half*>(block)))*float(1u+2u*scale);
+        float acc=0.0f;
+        for(uint l=0u;l<4u;++l){{
+          uint i0=uint(qs[2u*l])|((qh<<(8u-2u*l))&256u);
+          uint i1=uint(qs[2u*l+1u])|((qh<<(7u-2u*l))&256u);
+          uint sign_byte=uint(signs[l]);
+          for(uint j=0u;j<4u;++j){{
+            float v0=grid[i0*4u+j];
+            float v1=grid[i1*4u+j];
+            acc+=activation[l*8u+j]*((sign_byte&(1u<<j))?-v0:v0);
+            acc+=activation[l*8u+j+4u]*((sign_byte&(1u<<(j+4u)))?-v1:v1);
+          }}
+        }}
+        sums[rr]+=d*acc;
+      }}
+    }}
+    for(uint rr=0u;rr<4u;++rr){{
+      float total=simd_sum(sums[rr]);
+      uint out_row=first_row+rr;
+      if(lane==0u && out_row<N) output[input_row*N+out_row]=total;
+    }}
+    """
+
+
+@lru_cache(maxsize=None)
+def _iq3_s_kernel(in_features: int, out_features: int):
+    import mlx.core as mx
+    return mx.fast.metal_kernel(
+        name=f"mlx_gsq_iq3_s_packed_dot_{in_features}_{out_features}",
+        input_names=["x","packed","grid"], output_names=["output"],
+        source=_iq3_s_source(in_features, out_features),
+    )
+
+
 @lru_cache(maxsize=1)
 def _dummy_tables():
     import mlx.core as mx
@@ -81,5 +143,9 @@ def quantized_matvec(x, packed, *, qtype: str, out_features: int, in_features: i
         from .iq3_s_decode import _grid
         grid=_grid(); signs=_dummy_tables()[1]
     else: grid,signs=_dummy_tables()
-    out=_kernel(qtype,in_features,out_features)(inputs=[flat,packed,grid,signs],grid=(out_features*256,rows,1),threadgroup=(256,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
+    if qtype=="IQ3_S":
+        row_groups=(out_features+7)//8
+        out=_iq3_s_kernel(in_features,out_features)(inputs=[flat,packed,grid],grid=(row_groups*64,rows,1),threadgroup=(64,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
+    else:
+        out=_kernel(qtype,in_features,out_features)(inputs=[flat,packed,grid,signs],grid=(out_features*256,rows,1),threadgroup=(256,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
     return out.reshape((*original,out_features))
