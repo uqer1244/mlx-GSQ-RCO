@@ -16,8 +16,8 @@ weights into MLX-LM's standard uniform format.
 
 Weights are intentionally not stored in this GitHub repository.
 
-- Planned MLX checkpoint:
-  [`mlx-community/Qwen3.8-27B-GSQ-RCO-MLX`](https://huggingface.co/mlx-community/Qwen3.8-27B-GSQ-RCO-MLX)
+- MLX checkpoint:
+  [`uqer1244/Qwen3.8-27B-GSQ-RCO-MLX`](https://huggingface.co/uqer1244/Qwen3.8-27B-GSQ-RCO-MLX)
 - Direct GGUF parent:
   [`ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF`](https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF)
 - Original base model:
@@ -68,7 +68,7 @@ from mlx_gsq import load
 from mlx_lm.generate import generate
 
 model_dir = snapshot_download(
-    "mlx-community/Qwen3.8-27B-GSQ-RCO-MLX"
+    "uqer1244/Qwen3.8-27B-GSQ-RCO-MLX"
 )
 model, tokenizer = load(
     f"{model_dir}/model.safetensors",

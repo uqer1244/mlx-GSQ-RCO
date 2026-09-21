@@ -27,7 +27,7 @@ integration = ["mlx-lm>=0.30"]
 [project.urls]
 Homepage = "https://github.com/uqer1244/mlx-GSQ-RCO"
 Repository = "https://github.com/uqer1244/mlx-GSQ-RCO"
-"Model weights" = "https://huggingface.co/mlx-community/Qwen3.8-27B-GSQ-RCO-MLX"
+"Model weights" = "https://huggingface.co/uqer1244/Qwen3.8-27B-GSQ-RCO-MLX"
 
 [project.scripts]
 mlx-gsq-generate = "mlx_gsq.generate:main"
