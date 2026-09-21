@@ -305,6 +305,184 @@ def _iq4_xs_kernel(in_features: int, out_features: int):
     )
 
 
+_K_PACKED_BODIES = {
+    "Q2_K": r"""
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*84u;
+        float d=float(*(reinterpret_cast<device const half*>(block+80u)));
+        float dmin=float(*(reinterpret_cast<device const half*>(block+82u)));
+        uint chunk=group/4u,plane=group&3u;
+        device const uchar* qs=block+16u+chunk*32u;
+        float acc=0.0f;
+        for(uint pos=0u;pos<32u;++pos){
+          uint q=(uint(qs[pos])>>(2u*plane))&3u;
+          uint sm=uint(block[group*2u+pos/16u]);
+          acc+=activation[pos]*(d*float(sm&15u)*float(q)-dmin*float(sm>>4u));
+        }
+        sums[rr]+=acc;
+    """,
+    "Q4_K": r"""
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*144u;
+        device const uchar* scales=block+4u;
+        uint sc,mn;
+        if(group<4u){
+          sc=uint(scales[group])&63u; mn=uint(scales[4u+group])&63u;
+        }else{
+          uint g=group-4u;
+          sc=(uint(scales[8u+g])&15u)|((uint(scales[g])>>2u)&48u);
+          mn=(uint(scales[8u+g])>>4u)|((uint(scales[4u+g])>>2u)&48u);
+        }
+        float d=float(*(reinterpret_cast<device const half*>(block)));
+        float dmin=float(*(reinterpret_cast<device const half*>(block+2u)));
+        device const uchar* qs=block+16u+(group/2u)*32u;
+        uint shift=(group&1u)*4u;
+        float acc=0.0f;
+        for(uint pos=0u;pos<32u;++pos){
+          uint q=(uint(qs[pos])>>shift)&15u;
+          acc+=activation[pos]*(d*float(sc)*float(q)-dmin*float(mn));
+        }
+        sums[rr]+=acc;
+    """,
+    "Q6_K": r"""
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*210u;
+        uint chunk=group/4u,plane=group&3u;
+        float d=float(*(reinterpret_cast<device const half*>(block+208u)));
+        float acc=0.0f;
+        for(uint pos=0u;pos<32u;++pos){
+          uint in_chunk=plane*32u+pos;
+          uint ql=(uint(block[chunk*64u+(in_chunk&63u)])>>(4u*(in_chunk/64u)))&15u;
+          uint qh=(uint(block[128u+chunk*32u+pos])>>(2u*plane))&3u;
+          int q=int(ql|(qh<<4u))-32;
+          int scale=int(reinterpret_cast<device const char*>(block+192u)[group*2u+pos/16u]);
+          acc+=activation[pos]*d*float(scale*q);
+        }
+        sums[rr]+=acc;
+    """,
+}
+
+
+def _k_packed_source(qtype: str, in_features: int, out_features: int) -> str:
+    body = _K_PACKED_BODIES[qtype]
+    return f"""
+    constexpr uint K={in_features}u;
+    constexpr uint N={out_features}u;
+    constexpr uint blocks_per_row=K/256u;
+    constexpr uint groups_per_row=K/32u;
+    uint lane=thread_index_in_simdgroup;
+    uint first_row=threadgroup_position_in_grid.x*8u+simdgroup_index_in_threadgroup*4u;
+    uint input_row=threadgroup_position_in_grid.y;
+    float sums[4]={{0.0f,0.0f,0.0f,0.0f}};
+    for(uint group_index=lane;group_index<groups_per_row;group_index+=32u){{
+      float activation[32];
+      uint activation_base=input_row*K+group_index*32u;
+      for(uint i=0u;i<32u;++i) activation[i]=float(x[activation_base+i]);
+      uint block_col=group_index/8u;
+      uint group=group_index-block_col*8u;
+      for(uint rr=0u;rr<4u;++rr){{
+        uint out_row=first_row+rr;
+        if(out_row>=N) continue;
+    """ + body + r"""
+      }
+    }
+    for(uint rr=0u;rr<4u;++rr){
+      float total=simd_sum(sums[rr]);
+      uint out_row=first_row+rr;
+      if(lane==0u && out_row<N) output[input_row*N+out_row]=total;
+    }
+    """
+
+
+@lru_cache(maxsize=None)
+def _k_packed_kernel(qtype: str, in_features: int, out_features: int):
+    import mlx.core as mx
+    return mx.fast.metal_kernel(
+        name=f"mlx_gsq_{qtype.lower()}_packed_dot_v2_{in_features}_{out_features}",
+        input_names=["x","packed"], output_names=["output"],
+        source=_k_packed_source(qtype, in_features, out_features),
+    )
+
+
+_IQ2_PACKED_BODIES = {
+    "IQ2_XS": r"""
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*74u;
+        float base=float(*(reinterpret_cast<device const half*>(block)))*0.25f;
+        float acc=0.0f;
+        for(uint subgroup=0u;subgroup<4u;++subgroup){
+          uint o=group*4u+subgroup;
+          uint g=o/2u;
+          uint q=uint(block[2u+o*2u])|(uint(block[3u+o*2u])<<8u);
+          uint sb=uint(block[66u+g/2u]);
+          uint scale=(sb>>(4u*(g&1u)))&15u;
+          uint sign_byte=uint(ksigns[(q>>9u)&127u]);
+          uint qi=q&511u;
+          for(uint j=0u;j<8u;++j){
+            float v=grid[qi*8u+j];
+            acc+=activation[subgroup*8u+j]*base*(0.5f+float(scale))
+                *((sign_byte&(1u<<j))?-v:v);
+          }
+        }
+        sums[rr]+=acc;
+    """,
+    "IQ2_XXS": r"""
+        device const uchar* block=packed+(out_row*blocks_per_row+block_col)*66u;
+        device const uchar* qs=block+2u+group*8u;
+        uint u=uint(qs[4])|(uint(qs[5])<<8u)|(uint(qs[6])<<16u)|(uint(qs[7])<<24u);
+        float d=float(*(reinterpret_cast<device const half*>(block)))
+            *(0.5f+float(u>>28u))*0.25f;
+        float acc=0.0f;
+        for(uint l=0u;l<4u;++l){
+          uint sign_byte=uint(ksigns[(u>>(7u*l))&127u]);
+          uint qi=uint(qs[l]);
+          for(uint j=0u;j<8u;++j){
+            float v=grid[qi*8u+j];
+            acc+=activation[l*8u+j]*((sign_byte&(1u<<j))?-v:v);
+          }
+        }
+        sums[rr]+=d*acc;
+    """,
+}
+
+
+def _iq2_packed_source(qtype: str, in_features: int, out_features: int) -> str:
+    body = _IQ2_PACKED_BODIES[qtype]
+    return f"""
+    constexpr uint K={in_features}u;
+    constexpr uint N={out_features}u;
+    constexpr uint blocks_per_row=K/256u;
+    constexpr uint groups_per_row=K/32u;
+    uint lane=thread_index_in_simdgroup;
+    uint first_row=threadgroup_position_in_grid.x*8u+simdgroup_index_in_threadgroup*4u;
+    uint input_row=threadgroup_position_in_grid.y;
+    float sums[4]={{0.0f,0.0f,0.0f,0.0f}};
+    for(uint group_index=lane;group_index<groups_per_row;group_index+=32u){{
+      float activation[32];
+      uint activation_base=input_row*K+group_index*32u;
+      for(uint i=0u;i<32u;++i) activation[i]=float(x[activation_base+i]);
+      uint block_col=group_index/8u;
+      uint group=group_index-block_col*8u;
+      for(uint rr=0u;rr<4u;++rr){{
+        uint out_row=first_row+rr;
+        if(out_row>=N) continue;
+    """ + body + r"""
+      }
+    }
+    for(uint rr=0u;rr<4u;++rr){
+      float total=simd_sum(sums[rr]);
+      uint out_row=first_row+rr;
+      if(lane==0u && out_row<N) output[input_row*N+out_row]=total;
+    }
+    """
+
+
+@lru_cache(maxsize=None)
+def _iq2_packed_kernel(qtype: str, in_features: int, out_features: int):
+    import mlx.core as mx
+    return mx.fast.metal_kernel(
+        name=f"mlx_gsq_{qtype.lower()}_packed_dot_v2_{in_features}_{out_features}",
+        input_names=["x","packed","grid","ksigns"], output_names=["output"],
+        source=_iq2_packed_source(qtype, in_features, out_features),
+    )
+
+
 def _vector_source(qtype: str, in_features: int, out_features: int) -> str:
     body = _vector_decoder_body(qtype)
     return f"""
@@ -381,6 +559,12 @@ def quantized_matvec(x, packed, *, qtype: str, out_features: int, in_features: i
     elif qtype=="IQ4_XS":
         row_groups=(out_features+7)//8
         out=_iq4_xs_kernel(in_features,out_features)(inputs=[flat,packed],grid=(row_groups*64,rows,1),threadgroup=(64,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
+    elif qtype in _K_PACKED_BODIES:
+        row_groups=(out_features+7)//8
+        out=_k_packed_kernel(qtype,in_features,out_features)(inputs=[flat,packed],grid=(row_groups*64,rows,1),threadgroup=(64,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
+    elif qtype in _IQ2_PACKED_BODIES:
+        row_groups=(out_features+7)//8
+        out=_iq2_packed_kernel(qtype,in_features,out_features)(inputs=[flat,packed,grid,signs],grid=(row_groups*64,rows,1),threadgroup=(64,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
     else:
         row_groups=(out_features+7)//8
         out=_vector_kernel(qtype,in_features,out_features)(inputs=[flat,packed,grid,signs],grid=(row_groups*64,rows,1),threadgroup=(64,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
