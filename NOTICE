@@ -1,0 +1,15 @@
+mlx-GSQ-RCO
+Copyright 2026 parkJunyong
+
+This product includes or adapts ideas and interfaces from the following
+projects:
+
+- MLX and MLX-LM (MIT), Copyright Apple Inc.
+- llama.cpp and gguf-py (MIT), used as correctness references.
+- Qwen3.8-27B and its GSQ-RCO weights (Apache-2.0).
+
+The project does not bundle llama.cpp or upstream model weights. GSQ-RCO model weights are published
+separately and retain their upstream notices and license conditions.
+
+Upstream quantized model:
+https://huggingface.co/ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF

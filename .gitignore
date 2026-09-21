@@ -1,0 +1,15 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+build/
+dist/
+*.egg-info/
+
+# Model artifacts belong on Hugging Face, not GitHub.
+*.gguf
+*.safetensors
+*.safetensors.manifest.json
+Qwen*/

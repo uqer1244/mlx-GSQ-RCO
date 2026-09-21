@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mlx-gsq-rco"
+version = "0.1.0"
+description = "Run GSQ-RCO mixed-IQ GGUF weights on Apple Silicon with MLX"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [{name = "parkJunyong"}]
+keywords = ["mlx", "metal", "gguf", "quantization", "apple-silicon"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS :: MacOS X",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.optional-dependencies]
+dev = ["gguf>=0.17", "numpy>=1.26", "pytest>=8", "safetensors>=0.4"]
+mlx = ["mlx>=0.29"]
+integration = ["mlx-lm>=0.30"]
+
+[project.urls]
+Homepage = "https://github.com/uqer1244/mlx-GSQ-RCO"
+Repository = "https://github.com/uqer1244/mlx-GSQ-RCO"
+"Model weights" = "https://huggingface.co/mlx-community/Qwen3.8-27B-GSQ-RCO-MLX"
+
+[project.scripts]
+mlx-gsq-generate = "mlx_gsq.generate:main"
+mlx-gsq-gguf = "mlx_gsq.gguf.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["mlx_gsq"]
