@@ -8,8 +8,7 @@ container and routes every tensor to a decoder/QMV kernel for its GGUF type.
 It does not dequantize the full model into FP16 and does not requantize the
 weights into MLX-LM's standard uniform format.
 
-> Status: alpha, but end-to-end text logits have been validated against
-> llama.cpp Metal. This runtime currently targets the Qwen3.8-27B GSQ-RCO
+> Status: alpha. This runtime currently targets the Qwen3.8-27B GSQ-RCO
 > checkpoint and Apple Silicon.
 
 ## Model weights
@@ -120,32 +119,6 @@ model.safetensors.manifest.json
 The verifier compares the SHA-256 digest of all 866 packed tensor payloads
 against the GGUF source.
 
-## Validation
-
-The Metal block decoders and fused QMV kernels were checked against gguf-py's
-CPU reference. End-to-end logits were compared with llama.cpp Metal using the
-same token IDs:
-
-| Input | Top-k agreement | Cosine similarity | RMSE | Max abs error |
-|---|---:|---:|---:|---:|
-| `Hello` | top-20 20/20; top-100 100/100 | 0.9999975 | 0.00876 | 0.04160 |
-| `Hello,` | top-50 50/50; top-100 99/100 | 0.9999980 | 0.00820 | 0.03998 |
-
-Both runtimes choose token ID 11 (`,`) after `Hello`, and token ID 353 (` I`)
-after `Hello,`. The second test exercises recurrent Gated Delta Net state.
-
-The standalone one-token generation check used 10.312 GB peak MLX memory.
-
-Run the test suite with:
-
-```bash
-pytest -q
-```
-
-Hardware/model integration tests skip automatically when Metal or local model
-artifacts are unavailable. See [porting progress](docs/PORTING_PROGRESS.md) for
-the detailed implementation status.
-
 ## Architecture
 
 ```text
@@ -169,7 +142,7 @@ The packed format is identified by the Safetensors metadata value
 - Prefill is functional through the multi-row QMV path but does not yet have a
   dedicated tiled QMM kernel.
 - The current adapter targets this Qwen3.8/Qwen3.5 hybrid architecture.
-- Vision inference is not implemented; the validated path is text generation.
+- Vision inference is not implemented; only text generation is supported.
 - This is a custom packed format, not a drop-in standard MLX-LM checkpoint.
 
 ## License and attribution
