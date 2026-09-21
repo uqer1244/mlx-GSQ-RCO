@@ -19,35 +19,45 @@ def _decoder_body(qtype: str) -> str:
     return source[:m.start()] + replacement + source[m.end():]
 
 
-def _source(qtype: str) -> str:
+def _source(qtype: str, in_features: int, out_features: int) -> str:
     body = _decoder_body(qtype)
-    return r"""
+    return f"""
     uint tid=thread_index_in_threadgroup;
     uint out_row=threadgroup_position_in_grid.x;
     uint input_row=threadgroup_position_in_grid.y;
-    uint K=shape[0], N=shape[1], blocks_per_row=K/256u;
+    constexpr uint K={in_features}u;
+    constexpr uint N={out_features}u;
+    constexpr uint blocks_per_row=K/256u;
     float sum=0.0f;
-    for(uint bc=0;bc<blocks_per_row;++bc){
+    for(uint bc=0;bc<blocks_per_row;++bc){{
         uint index=(out_row*blocks_per_row+bc)*256u+tid;
     """ + body + r"""
     }
-    threadgroup float partial[256]; partial[tid]=sum;
+    // Reduce within SIMD groups first. This replaces eight full-threadgroup
+    // barrier/reduction rounds with one SIMD reduction and one small
+    // cross-SIMD reduction.
+    threadgroup float partial[8];
+    float simd_total=simd_sum(sum);
+    if(thread_index_in_simdgroup==0u)
+        partial[simdgroup_index_in_threadgroup]=simd_total;
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    for(uint stride=128u;stride>0u;stride>>=1u){
-        if(tid<stride) partial[tid]+=partial[tid+stride];
-        threadgroup_barrier(mem_flags::mem_threadgroup);
+    if(simdgroup_index_in_threadgroup==0u){
+        float group_total=thread_index_in_simdgroup<8u
+            ? partial[thread_index_in_simdgroup] : 0.0f;
+        group_total=simd_sum(group_total);
+        if(thread_index_in_simdgroup==0u)
+            output[input_row*N+out_row]=group_total;
     }
-    if(tid==0u) output[input_row*N+out_row]=partial[0];
     """
 
 
 @lru_cache(maxsize=None)
-def _kernel(qtype: str):
+def _kernel(qtype: str, in_features: int, out_features: int):
     import mlx.core as mx
     return mx.fast.metal_kernel(
-        name=f"mlx_gsq_{qtype.lower()}_qmv",
-        input_names=["x","packed","grid","ksigns","shape"],
-        output_names=["output"],source=_source(qtype),
+        name=f"mlx_gsq_{qtype.lower()}_{in_features}_{out_features}_qmv",
+        input_names=["x","packed","grid","ksigns"],
+        output_names=["output"],source=_source(qtype, in_features, out_features),
     )
 
 
@@ -71,6 +81,5 @@ def quantized_matvec(x, packed, *, qtype: str, out_features: int, in_features: i
         from .iq3_s_decode import _grid
         grid=_grid(); signs=_dummy_tables()[1]
     else: grid,signs=_dummy_tables()
-    shape=mx.array([in_features,out_features],dtype=mx.uint32)
-    out=_kernel(qtype)(inputs=[flat,packed,grid,signs,shape],grid=(out_features*256,rows,1),threadgroup=(256,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
+    out=_kernel(qtype,in_features,out_features)(inputs=[flat,packed,grid,signs],grid=(out_features*256,rows,1),threadgroup=(256,1,1),output_shapes=[(rows,out_features)],output_dtypes=[x.dtype])[0]
     return out.reshape((*original,out_features))
