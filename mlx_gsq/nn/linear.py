@@ -14,5 +14,11 @@ class GSQLinear(nn.Module):
 
     def __call__(self,x):
         from mlx_gsq.runtime.kernels.qmv import quantized_matvec
-        y=quantized_matvec(x,self.packed_weight,qtype=self.qtype,out_features=self.out_features,in_features=self.in_features)
+        import mlx.core as mx
+        rows=x.size//self.in_features
+        if rows==1:
+            y=quantized_matvec(x,self.packed_weight,qtype=self.qtype,out_features=self.out_features,in_features=self.in_features)
+        else:
+            from mlx_gsq.runtime.kernels.qmm import quantized_matmul
+            y=quantized_matmul(x,self.packed_weight,qtype=self.qtype,out_features=self.out_features,in_features=self.in_features)
         return y if self.bias is None else y+self.bias

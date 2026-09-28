@@ -8,7 +8,7 @@ build/
 dist/
 *.egg-info/
 
-# Model artifacts belong on Hugging Face, not GitHub.
+# Model artifacts are hosted on Hugging Face, not GitHub.
 *.gguf
 *.safetensors
 *.safetensors.manifest.json

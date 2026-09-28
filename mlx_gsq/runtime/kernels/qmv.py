@@ -6,6 +6,7 @@ import re
 from .iq3_s_decode import _SOURCE as _IQ3_SOURCE
 from .iq_lookup_decode import _SOURCES as _IQ_SOURCES, _tables
 from .k_decode import _SOURCES as _K_SOURCES
+from .qmm import QMM_MIN_ROWS, quantized_matmul
 
 
 def _decoder_body(qtype: str) -> str:
@@ -542,6 +543,10 @@ def quantized_matvec(x, packed, *, qtype: str, out_features: int, in_features: i
     if packed.size!=expected: raise ValueError(f"packed size {packed.size} != expected {expected}")
     if x.shape[-1]!=in_features: raise ValueError("input feature size mismatch")
     original=x.shape[:-1]; rows=x.size//in_features; flat=x.reshape((rows,in_features))
+    # Prefill path: for multi-row inputs the tiled QMM decodes each packed
+    # weight block once per M_TILE input rows instead of once per row.
+    if rows>=QMM_MIN_ROWS:
+        return quantized_matmul(flat, packed, qtype=qtype, out_features=out_features, in_features=in_features).reshape((*original, out_features))
     if qtype in _IQ_SOURCES: grid,signs=_tables(qtype)
     elif qtype=="IQ3_S":
         from .iq3_s_decode import _grid
